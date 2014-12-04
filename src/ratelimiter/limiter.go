@@ -1,8 +1,8 @@
 package ratelimiter
 
 import (
-	"fmt"
 	"github.com/garyburd/redigo/redis"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,63 +24,53 @@ func Initialize(redisAddress string, maxConnections int) {
 	}, maxConnections)
 }
 
-type Options struct {
-	MaxCalls  int
-	Period    int64
-	Username  bool
-	IpAddress bool
-	Path      bool
-}
+type KeyPartialFunc func(req *http.Request) string
 
-func Limiter(options Options, handlerFunc http.HandlerFunc) http.HandlerFunc {
+func Limiter(maxCalls int, period int64, keyPartialFunc KeyPartialFunc, handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		c := redisPool.Get()
 		defer c.Close()
 
-		fmt.Println("OK")
-		keyPartial := generateKeyPartial(options, req)
-		timeBucket := strconv.FormatInt(time.Now().Unix()/options.Period, 10)
+		keyPartial := keyPartialFunc(req)
+		timeBucket := strconv.FormatInt(time.Now().Unix()/period, 10)
 		key := "ratelimiter:" + keyPartial + ":" + timeBucket
 
-		expireIn := options.Period - (time.Now().Unix() % options.Period) + 1
-		fmt.Printf("%s - %d\n", key, expireIn)
+		expireIn := period - (time.Now().Unix() % period) + 1
 
-		currentCount, _ := redis.Int(c.Do("INCR", key))
-		c.Do("EXPIRE", key, expireIn)
+		c.Send("MULTI")
+		c.Send("INCR", key)
+		c.Send("EXPIRE", key, expireIn)
+		responses, ok := c.Do("EXEC")
+		values, ok := redis.Values(responses, ok)
+		currentCount, ok := redis.Int(values[0], ok)
 
-		fmt.Fprintf(w, "I wrap %d-%d/%d!", options.Period, currentCount, options.MaxCalls)
-		if currentCount > options.MaxCalls {
-			fmt.Fprintf(w, "FAIL!")
+		log.Printf("%d - every %ds (%d/%d)", key, period, currentCount, maxCalls)
+		if currentCount > maxCalls {
+			w.WriteHeader(429)
 		} else {
 			handlerFunc(w, req)
 		}
 	}
 }
 
-func generateKeyPartial(options Options, req *http.Request) string {
-	limiters := make([]string, 0, 3)
-	if options.IpAddress {
-		ip, _, _ := net.SplitHostPort(req.RemoteAddr)
-		limiters = append(limiters, "ip-"+ip)
-	}
-	if options.Username {
-		//I assume that they are sending the username using HTTP Basic, with no password (e.g. "case.taintor:")
-		authorization, ok := req.Header["Authorization"]
-		if ok && len(authorization) > 0 {
-			parts := strings.SplitN(authorization[0], " ", 2)
-			if len(parts) == 2 {
-				//This is actually the base64 username - less readable, but no real rason to decode for this use-case :)
-				limiters = append(limiters, "username-"+parts[1])
-			}
+func ByIpAddress(req *http.Request) string {
+	ip, _, _ := net.SplitHostPort(req.RemoteAddr)
+	return ip
+}
+
+func ByUsername(req *http.Request) string {
+	//I assume that they are sending the username using HTTP Basic, with no password (e.g. "case.taintor:")
+	authorization, ok := req.Header["Authorization"]
+	if ok && len(authorization) > 0 {
+		parts := strings.SplitN(authorization[0], " ", 2)
+		if len(parts) == 2 {
+			//This is actually the base64 username - less readable, but no real rason to decode for this use-case :)
+			return "username-" + parts[1]
 		}
 	}
-	if options.Path {
-		limiters = append(limiters, "path-"+req.URL.Path)
-	}
+	return ""
+}
 
-	keyPartial := strings.Join(limiters, ":")
-	if len(keyPartial) == 0 {
-		keyPartial = "global"
-	}
-	return keyPartial
+func ByPath(req *http.Request) string {
+	return "path-" + req.URL.Path
 }

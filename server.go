@@ -6,21 +6,36 @@ import (
 	"ratelimiter"
 )
 
-func echoHandler(w http.ResponseWriter, r *http.Request) {
+func echoHandler(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, "You passed!")
+}
+
+func globalStr(req *http.Request) string {
+	return "global"
 }
 
 func main() {
 	ratelimiter.Initialize(":6379", 100)
-	globalLimit := ratelimiter.Options{MaxCalls: 100, Period: 60}
+	var globalMaxCalls = 100
+	var globalPeriod int64 = 60
 
-	limitByIp := ratelimiter.Options{MaxCalls: 2, Period: 3, IpAddress: true}
-	http.HandleFunc("/block_by_ip", ratelimiter.Limiter(globalLimit, ratelimiter.Limiter(limitByIp, echoHandler)))
+	http.HandleFunc("/block_by_ip",
+		ratelimiter.Limiter(globalMaxCalls, globalPeriod, globalStr,
+			ratelimiter.Limiter(5, 10, ratelimiter.ByIpAddress, echoHandler)))
 
-	limitByUser := ratelimiter.Options{MaxCalls: 10, Period: 10, Username: true}
-	http.HandleFunc("/block_by_user", ratelimiter.Limiter(globalLimit, ratelimiter.Limiter(limitByUser, echoHandler)))
+	http.HandleFunc("/block_by_user",
+		ratelimiter.Limiter(globalMaxCalls, globalPeriod, globalStr,
+			ratelimiter.Limiter(60, 30, ratelimiter.ByUsername, echoHandler)))
 
-	limitByPath := ratelimiter.Options{MaxCalls: 20, Period: 30, Path: true}
-	http.HandleFunc("/block_by_path", ratelimiter.Limiter(globalLimit, ratelimiter.Limiter(limitByPath, echoHandler)))
+	http.HandleFunc("/block_by_path",
+		ratelimiter.Limiter(globalMaxCalls, globalPeriod, globalStr,
+			ratelimiter.Limiter(1, 1, ratelimiter.ByPath, echoHandler)))
+
+	http.HandleFunc("/block_by_user_and_ip",
+		ratelimiter.Limiter(globalMaxCalls, globalPeriod, globalStr,
+			ratelimiter.Limiter(20, 10, func(req *http.Request) string {
+				return ratelimiter.ByUsername(req) + ":" + ratelimiter.ByPath(req)
+			}, echoHandler)))
+
 	http.ListenAndServe(":8080", nil)
 }
