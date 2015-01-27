@@ -1,6 +1,7 @@
 # Go Rate Limiter
 
-This is a simple rate limiter which uses Redis to keep track of call frequency
+This is a simple rate limiter which uses Redis to keep track of call frequency. It was written as a way for me
+to learn a bit about Go and Redis.
 
 ## Usage Overview
 
@@ -56,18 +57,3 @@ curl -u case.taintor: localhost:8080/block_by_user
 curl -u case.taintor: localhost:8080/block_by_path
 ```
 
-## Scaling and High Availability
-
-It's hard to say what your scaling strategy should be when it comes to rate limiting without knowing what sort of
-problems you are having. As in, it's highly likely that if you are experiencing serious scaling issues related
-to rate limiting, then you are probably experiencing other issues such as network saturation. A few concepts:
-
-* Utilize Redis HA capabilities - such as RedisLabs or Sentinel (I should say that I have not investigated whether these truly 
-  work...)
-* It could be a good idea to separate your Redis usage to mitigate issues where rate-limiting infrastructure affects normal-
-  usage infrastructure
-* Ensure that the rate limiting happens as far up the request chain as possible - potentially in a service separate from your
-  business logic.
-* Apply limits that are easy to generically apply and design your APIs in a way to enable this. For instance, I have seen a few
-  APIs that require payload parsing in order to determine who the user is, which means that user-level rate limiting is 
-  ineffective.
